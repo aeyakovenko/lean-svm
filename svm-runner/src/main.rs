@@ -722,6 +722,49 @@ fn test_bonding_curve() {
     );
 }
 
+/// Run a program that reads a seed from account data[0..8] and writes its result to data[8..16].
+fn run_seed(so: &[u8], seed: u64) -> u64 {
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    let program_id = Address::new_unique();
+    svm.add_program(program_id, so).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let acc_addr = Address::new_unique();
+    let mut data = vec![0u8; 16];
+    data[0..8].copy_from_slice(&seed.to_le_bytes());
+    svm.set_account(acc_addr, Account {
+        lamports: 1_000_000, data, owner: program_id, ..Default::default()
+    }).unwrap();
+
+    let ix = Instruction {
+        program_id, accounts: vec![AccountMeta::new(acc_addr, false)], data: vec![0u8],
+    };
+    send_ix(&mut svm, &payer, &[], ix).expect("scalar semantics program failed");
+    let after = svm.get_account(&acc_addr).unwrap();
+    u64::from_le_bytes(after.data[8..16].try_into().unwrap())
+}
+
+/// Scalar ops where Lean is total but raw sBPF is not: `Nat.sub` saturates at 0 and
+/// `x / 0`, `x % 0` are defined (`0` and `x`). Both used to diverge from the Lean model.
+fn test_scalar_semantics() {
+    let natsub = load_so("natsub.so");
+    let divzero = load_so("divzero.so");
+
+    for (seed, expected) in [(0u64, 0u64), (1, 0), (5, 4), (u64::MAX, u64::MAX - 1)] {
+        let got = run_seed(&natsub, seed);
+        assert_eq!(got, expected, "(Nat {seed}) - 1 must saturate at 0, got {got:#x}");
+    }
+
+    // Example: q = 1000 / d, r = 1000 % d, result = q ^^^ r
+    for (seed, expected) in [(0u64, 1000u64), (1, 1000), (7, 142 ^ 6)] {
+        let got = run_seed(&divzero, seed);
+        assert_eq!(got, expected, "1000 / {seed} ^^^ 1000 % {seed}, got {got:#x}");
+    }
+
+    println!("[PASS] ScalarSemantics | Nat.sub saturates at 0, x / 0 = 0, x % 0 = x");
+}
+
 fn bench_vs_rust() {
     println!("\n==================================================================================");
     println!("  HEAD-TO-HEAD BENCHMARK: LeanSVM (Lean 4) vs Hand-Rolled `#![no_std]` Rust (LLVM 22 -O3)");
@@ -886,7 +929,8 @@ fn main() {
     test_lending();
     test_dutch_auction();
     test_bonding_curve();
+    test_scalar_semantics();
     bench_vs_rust();
-    println!("  ALL 8 FORMALLY VERIFIED LEAN 4 PROGRAMS + HEAD-TO-HEAD RUST BENCHMARKS PASSED!");
+    println!("  ALL 10 LEAN 4 PROGRAMS + HEAD-TO-HEAD RUST BENCHMARKS PASSED!");
     println!("==================================================================================");
 }

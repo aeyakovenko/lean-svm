@@ -313,6 +313,61 @@ private def lowerBinScalar (op : BinOp) (mask? : Option UInt64) (a b : Val) : Lo
     return .reg masked
   | none => return .reg dst
 
+/-- Lean's `Nat.sub` saturates at 0, sBPF `sub64` wraps. Emit `if a < b then 0 else a - b`. -/
+private def lowerSaturatingSub (a b : Val) : LowerM Val := do
+  match a, b with
+  | .natLit x, .natLit y => return .natLit (x - y)
+  | _, _ =>
+    let ra ← valToReg a
+    let rb ← valToReg b
+    let diff ← freshVReg
+    emit (.binOp .sub64 diff ra rb)
+    let jp ← freshVReg
+    let underBlk ← newBlock
+    let okBlk ← newBlock
+    let joinBlk ← newBlock #[jp]
+    setTerm (.brCmp .ult ra rb underBlk #[] okBlk #[])
+    switchBlock underBlk
+    let zeroReg ← emitConst 0
+    setTerm (.jmp joinBlk #[zeroReg])
+    switchBlock okBlk
+    setTerm (.jmp joinBlk #[diff])
+    switchBlock joinBlk
+    return .reg jp
+
+/-- Lean's `x / 0 = 0` and `x % 0 = x` are total, but sBPF `div`/`mod` trap on a zero
+    divisor. Guard the dynamic case so a user program cannot abort the transaction
+    (and lose its compute budget) on a path Lean says is well defined. -/
+private def lowerDivModScalar (op : BinOp) (a b : Val) : LowerM Val := do
+  let isDiv := match op with | .div64 | .div32 => true | _ => false
+  match b with
+  | .natLit n =>
+    if n == 0 then
+      if isDiv then return .reg (← emitConst 0) else return .reg (← valToReg a)
+    let rb ← valToReg b
+    let ra ← valToReg a
+    let dst ← freshVReg
+    emit (.binOp op dst ra rb)
+    return .reg dst
+  | _ =>
+    let ra ← valToReg a
+    let rb ← valToReg b
+    let zeroReg ← emitConst 0
+    let jp ← freshVReg
+    let nzBlk ← newBlock
+    let zeroBlk ← newBlock
+    let joinBlk ← newBlock #[jp]
+    setTerm (.brCmp .ne rb zeroReg nzBlk #[] zeroBlk #[])
+    switchBlock nzBlk
+    let dst ← freshVReg
+    emit (.binOp op dst ra rb)
+    setTerm (.jmp joinBlk #[dst])
+    switchBlock zeroBlk
+    let z ← if isDiv then emitConst 0 else pure ra
+    setTerm (.jmp joinBlk #[z])
+    switchBlock joinBlk
+    return .reg jp
+
 /-- Lower a known scalar comparison (`UInt64/32/16/8`, `Nat`, `Bool`). -/
 private def lowerCmpScalar (op : CmpOp) (a b : Val) : LowerM Val := do
   let ra ← valToReg a
@@ -496,8 +551,8 @@ private def tryLowerPrimitive (declName : Name) (vals : Array Val) : LowerM (Opt
   | ``UInt64.add => some <$> lowerBinScalar .add64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt64.sub => some <$> lowerBinScalar .sub64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt64.mul => some <$> lowerBinScalar .mul64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt64.div => some <$> lowerBinScalar .div64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt64.mod => some <$> lowerBinScalar .mod64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt64.div => some <$> lowerDivModScalar .div64 (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt64.mod => some <$> lowerDivModScalar .mod64 (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt64.land => some <$> lowerBinScalar .and64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt64.lor  => some <$> lowerBinScalar .or64  none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt64.xor  => some <$> lowerBinScalar .xor64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
@@ -511,8 +566,8 @@ private def tryLowerPrimitive (declName : Name) (vals : Array Val) : LowerM (Opt
   | ``UInt32.add => some <$> lowerBinScalar .add32 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt32.sub => some <$> lowerBinScalar .sub32 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt32.mul => some <$> lowerBinScalar .mul32 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt32.div => some <$> lowerBinScalar .div32 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt32.mod => some <$> lowerBinScalar .mod32 none (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt32.div => some <$> lowerDivModScalar .div32 (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt32.mod => some <$> lowerDivModScalar .mod32 (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt32.land => some <$> lowerBinScalar .and32 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt32.lor  => some <$> lowerBinScalar .or32  none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt32.xor  => some <$> lowerBinScalar .xor32 none (vals.getD 0 .erased) (vals.getD 1 .erased)
@@ -526,8 +581,8 @@ private def tryLowerPrimitive (declName : Name) (vals : Array Val) : LowerM (Opt
   | ``UInt16.add => some <$> lowerBinScalar .add64 (some 0xFFFF) (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt16.sub => some <$> lowerBinScalar .sub64 (some 0xFFFF) (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt16.mul => some <$> lowerBinScalar .mul64 (some 0xFFFF) (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt16.div => some <$> lowerBinScalar .div64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt16.mod => some <$> lowerBinScalar .mod64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt16.div => some <$> lowerDivModScalar .div64 (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt16.mod => some <$> lowerDivModScalar .mod64 (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt16.land => some <$> lowerBinScalar .and64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt16.lor  => some <$> lowerBinScalar .or64  none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt16.xor  => some <$> lowerBinScalar .xor64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
@@ -539,8 +594,8 @@ private def tryLowerPrimitive (declName : Name) (vals : Array Val) : LowerM (Opt
   | ``UInt8.add => some <$> lowerBinScalar .add64 (some 0xFF) (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt8.sub => some <$> lowerBinScalar .sub64 (some 0xFF) (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt8.mul => some <$> lowerBinScalar .mul64 (some 0xFF) (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt8.div => some <$> lowerBinScalar .div64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``UInt8.mod => some <$> lowerBinScalar .mod64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt8.div => some <$> lowerDivModScalar .div64 (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``UInt8.mod => some <$> lowerDivModScalar .mod64 (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt8.land => some <$> lowerBinScalar .and64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt8.lor  => some <$> lowerBinScalar .or64  none (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``UInt8.xor  => some <$> lowerBinScalar .xor64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
@@ -550,10 +605,10 @@ private def tryLowerPrimitive (declName : Name) (vals : Array Val) : LowerM (Opt
 
   -- === Scalar Nat ops (for loop indices / small literals) ===
   | ``Nat.add => some <$> lowerBinScalar .add64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``Nat.sub => some <$> lowerBinScalar .sub64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``Nat.sub => some <$> lowerSaturatingSub (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``Nat.mul => some <$> lowerBinScalar .mul64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``Nat.div => some <$> lowerBinScalar .div64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
-  | ``Nat.mod => some <$> lowerBinScalar .mod64 none (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``Nat.div => some <$> lowerDivModScalar .div64 (vals.getD 0 .erased) (vals.getD 1 .erased)
+  | ``Nat.mod => some <$> lowerDivModScalar .mod64 (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``Nat.beq | ``Nat.decEq => some <$> lowerCmpScalar .eq  (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``Nat.ble | ``Nat.decLe => some <$> lowerCmpScalar .ule (vals.getD 0 .erased) (vals.getD 1 .erased)
   | ``Nat.blt | ``Nat.decLt => some <$> lowerCmpScalar .ult (vals.getD 0 .erased) (vals.getD 1 .erased)

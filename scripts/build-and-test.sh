@@ -4,7 +4,7 @@ set -euo pipefail
 echo "=== 1. Build Lean 4 SDK, compiler, and kernel-check all formal proofs ==="
 lake build
 
-echo "=== 2. Compile all 8 Lean 4 programs directly to Solana sBPF ELF64 (.so) ==="
+echo "=== 2. Compile all Lean 4 programs directly to Solana sBPF ELF64 (.so) ==="
 mkdir -p build
 lake exe lean-svm build Examples.Noop         Examples.Noop.entrypoint         -o build/noop.so
 lake exe lean-svm build Examples.Counter      Examples.Counter.entrypoint      -o build/counter.so
@@ -14,6 +14,8 @@ lake exe lean-svm build Examples.Amm          Examples.Amm.entrypoint          -
 lake exe lean-svm build Examples.Lending      Examples.Lending.entrypoint      -o build/lending.so
 lake exe lean-svm build Examples.DutchAuction Examples.DutchAuction.entrypoint -o build/dutch_auction.so
 lake exe lean-svm build Examples.BondingCurve Examples.BondingCurve.entrypoint -o build/bonding_curve.so
+lake exe lean-svm build Examples.NatSub       Examples.NatSub.entrypoint       -o build/natsub.so
+lake exe lean-svm build Examples.DivZero      Examples.DivZero.entrypoint      -o build/divzero.so
 
 echo "=== 3. Compile hand-rolled #![no_std] Rust baselines (if Solana platform-tools installed) ==="
 SOLANA_TOOLS="${SOLANA_TOOLS:-$HOME/.cache/solana/v1.58/platform-tools}"
