@@ -5,6 +5,7 @@ import LeanSVM.Input
 import LeanSVM.Math
 import LeanSVM.CPI
 import LeanSVM.SBPF.ISA
+import LeanSVM.SBPF.AssemblySize
 import LeanSVM.SBPF.Peephole
 import LeanSVM.SBPF.ELF
 import LeanSVM.Compiler.IR
