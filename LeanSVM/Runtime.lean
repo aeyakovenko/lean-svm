@@ -23,6 +23,14 @@ structure SvmState where
   stackSp : UInt64 := 0x200001000
   /-- Mock clock slot (used by `sysClock` in pure Lean proofs). -/
   slot    : UInt64 := 0
+  /-- Clock epoch start timestamp, as a signed i64 bit pattern. -/
+  epochStartTimestamp : UInt64 := 0
+  /-- Clock epoch. -/
+  epoch : UInt64 := 0
+  /-- Clock leader schedule epoch. -/
+  leaderScheduleEpoch : UInt64 := 0
+  /-- Clock Unix timestamp, as a signed i64 bit pattern. -/
+  unixTimestamp : UInt64 := 0
 
 namespace SvmState
 
@@ -257,7 +265,17 @@ end SolanaM
 
 /-- Compare `len` bytes at `a` and `b`, storing i32 result at `resultPtr`, via `sol_memcmp_`. -/
 @[noinline] def sysMemcmp (a b len resultPtr : UInt64) (s : SvmState) : SvmStep Unit :=
-  let diff : UInt32 := if s.readU8 a == s.readU8 b && len == len then 0 else 1
+  let rec compare (remaining : Nat) (offset : UInt64) : UInt32 :=
+    match remaining with
+    | 0 => 0
+    | n + 1 =>
+      let lhs := s.readU8 (a + offset)
+      let rhs := s.readU8 (b + offset)
+      if lhs == rhs then
+        compare n (offset + 1)
+      else
+        lhs.toUInt32 - rhs.toUInt32
+  let diff := compare len.toNat 0
   .ok () (s.writeU32 resultPtr diff)
 
 /-- Compute SHA-256 over `valsLen` `(ptr, len)` slice descriptors at `valsPtr`,
@@ -269,7 +287,12 @@ end SolanaM
 /-- Read the Solana Clock sysvar (40 bytes: slot, epoch_start_timestamp, epoch,
     leader_schedule_epoch, unix_timestamp) into `outPtr` via `sol_get_clock_sysvar`. -/
 @[noinline] def sysGetClock (outPtr : UInt64) (s : SvmState) : SvmStep UInt64 :=
-  .ok (if outPtr == 0 then 1 else 0) (s.writeU64 outPtr s.slot)
+  let clock := s.writeU64 outPtr s.slot
+  let clock := clock.writeU64 (outPtr + 8) s.epochStartTimestamp
+  let clock := clock.writeU64 (outPtr + 16) s.epoch
+  let clock := clock.writeU64 (outPtr + 24) s.leaderScheduleEpoch
+  let clock := clock.writeU64 (outPtr + 32) s.unixTimestamp
+  .ok (if outPtr == 0 then 1 else 0) clock
 
 /-- Cross-program invocation via `sol_invoke_signed_c`. -/
 @[noinline] def sysInvokeSignedC (ixPtr infosPtr infosLen seedsPtr seedsLen : UInt64)
