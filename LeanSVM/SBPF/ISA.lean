@@ -43,7 +43,7 @@ inductive AluOp where
   | add | sub | mul | div | or | and | lsh | rsh | mod | xor | mov | arsh
   deriving Repr, BEq, DecidableEq
 
-/-- True iff Solana sBPF (both v0 and v3) sign-extends the 32-bit result of `op` into
+/-- True iff Solana sBPF v3 sign-extends the 32-bit result of `op` into
     bits `32..63` (`i32 → i64 → u64`) instead of zero-extending (`u32 → u64`). -/
 def AluOp.signExtendsInAlu32 : AluOp → Bool
   | .add | .sub | .mul => true

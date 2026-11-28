@@ -141,12 +141,12 @@ def evalAlu32 (op : AluOp) (a b : UInt64) : UInt64 :=
     | .arsh => (a32.toInt32 >>> (b32 &&& 31).toInt32).toUInt32
   res.toUInt64
 
-/-- Sign-extend a 32-bit word into 64 bits (`i32 → i64 → u64`), matching Solana sBPF's
-    `add32`, `sub32`, and `mul32` register writeback semantics (both v0 and v3). -/
+/-- Sign-extend a 32-bit word into 64 bits (`i32 → i64 → u64`), matching Solana sBPF v3's
+    `add32`, `sub32`, and `mul32` register writeback semantics. -/
 def signExt32U32 (v : UInt32) : UInt64 :=
   v.toInt32.toInt64.toUInt64
 
-/-- Exact Solana sBPF (v0 & v3) hardware `ALU32` semantics:
+/-- Exact Solana sBPF v3 hardware `ALU32` semantics:
     `add32`, `sub32`, and `mul32` sign-extend bit 31 into bits `32..63`, while all other
     32-bit ALU operations (`mov32`, `and32`, `or32`, `xor32`, `lsh32`, `rsh32`, `div32`,
     `mod32`, `arsh32`) zero-extend into bits `32..63`. -/
@@ -4514,10 +4514,10 @@ theorem neg64_v3_sound (a : UInt64) :
     (0 : UInt64) - a = (0 - a) ∧ neg64Opc = 0x87 ∧ neg64Opc ≠ stImmOpc .b4 := by
   refine ⟨rfl, rfl, by decide⟩
 
-/-- **THEOREM (`subImm` → `addImm (-imm)` Soundness — sBPF v0 & v3 Exact Equivalence)**:
+/-- **THEOREM (`subImm` → `addImm (-imm)` Soundness — sBPF v3 SIMD-0174 Safety)**:
     For EVERY `imm : Int32` with `imm.toInt ≠ -2147483648` (so `-imm` fits in `Int32`),
     subtracting `imm` equals adding `Int32.ofInt (-imm.toInt)` in BOTH 64-bit AND 32-bit
-    arithmetic — eliminating the v0/v3 `SUB_IMM` operand-order divergence! -/
+    arithmetic — avoiding sBPF v3's reversed `SUB_IMM` (`imm - dst`) operand order! -/
 theorem subImm_to_addImm_sound (a : UInt64) (imm : Int32) (hneMin : imm.toInt ≠ -2147483648) :
     let negImm : Int32 := Int32.ofInt (-imm.toInt)
     evalBinImm .add64 a negImm = evalBinImm .sub64 a imm ∧

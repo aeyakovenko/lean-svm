@@ -9,7 +9,7 @@
     1. CFG integrity: unique block IDs, block 0 present, every edge target exists with exact
        block-parameter arity, every `.call` target exists in `Program.helpers`.
     2. ISA / verifier safety: every shift immediate is in `[0, 63]` / `[0, 31]`; no `sub64`/`sub32`
-       immediate uses `Int32.minValue` (guaranteeing sBPF v0 & v3 safety).
+       immediate uses `Int32.minValue` (guaranteeing sBPF v3 safety).
     3. Register & stack well-formedness: every allocated reg is in `r1..r9` (never `r0` or `r10`),
        every spill slot is 8-byte aligned, strictly disjoint from user `stackAllocBytes`, and within
        the 4096-byte sBPF stack frame (`totalStackBytes ≤ 4096`).
@@ -407,7 +407,7 @@ def stackAccessLegal (base : Reg) (sz : MemSize) (off : Int16) : Bool :=
     (-4096 : Int) ≤ off.toInt && off.toInt + memSizeBytes sz ≤ 0
   else true
 
-/-- Check ALU immediate legality for both sBPF v0 and strict sBPF v3. -/
+/-- Check ALU immediate legality for strict sBPF v3. -/
 def sbpfAluImmLegal (is64 : Bool) (op : AluOp) (imm : Int32) : Bool :=
   match op with
   | .lsh | .rsh | .arsh =>
@@ -416,7 +416,7 @@ def sbpfAluImmLegal (is64 : Bool) (op : AluOp) (imm : Int32) : Bool :=
   | .div | .mod => imm.toInt ≠ 0
   | _ => true
 
-/-- Pure, total Agave sBPF v0/v3 instruction-level safety predicate checked on EVERY emitted
+/-- Pure, total Agave sBPF v3 instruction-level safety predicate checked on EVERY emitted
     instruction AFTER `SBPF.peepholeOptimize` and BEFORE `SBPF.emitElf`! -/
 def checkSbpfInsn (labels : Std.HashSet String) : Insn → Bool
   | .label _ => true

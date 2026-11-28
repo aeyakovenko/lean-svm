@@ -1,4 +1,4 @@
-# `lean-svm` — Native Lean 4 → Solana sBPF Optimizing Compiler Toolchain
+# `lean-svm` — Native Lean 4 → Solana sBPF v3 Optimizing Compiler Toolchain
 
 > **⚠️ Educational & Research Purposes Only — Not Audited for Production Use**
 >
@@ -10,11 +10,11 @@ Write Solana on-chain programs in Lean 4, prove critical invariants (lamport con
 
 ---
 
-## Benchmarks (Verified on Real LiteSVM / Agave 3.1.3)
+## Benchmarks (Verified on Real LiteSVM `0.18.2` / sBPF v3)
 
-### Head-to-Head: `lean-svm` (Lean 4) vs Hand-Rolled `#![no_std]` Rust (Solana `rustc 1.95` / LLVM 22 `-O3 -C lto=fat -C strip=symbols`)
+### Head-to-Head: `lean-svm` (Lean 4, sBPF v3) vs Hand-Rolled `#![no_std]` Rust (Solana `rustc 1.95` / LLVM 22 `-O3 -C lto=fat -C strip=symbols`)
 
-All Rust baselines are zero-dependency `#![no_std]` raw-pointer programs (leaner than Anchor and Pinocchio), compiled with Solana platform-tools `v1.58`, and executed on identical transactions in `litesvm 0.11.0`.
+All Rust baselines are zero-dependency `#![no_std]` raw-pointer programs (leaner than Anchor and Pinocchio), compiled with Solana platform-tools `v1.58`, and executed on identical transactions in `litesvm`.
 
 | Program | LeanSVM `.so` | Rust `-O3` `.so` | Size Advantage | LeanSVM CUs | Rust `-O3` CUs | Heap |
 |---|---:|---:|---:|---:|---:|---:|
@@ -89,7 +89,7 @@ Lean 4 Monomorphic LCNF (`Lean.Compiler.LCNF.monoExt`)
       • Branch-over-jump inversion, jump-to-exit forwarding, `mov+ldx` folding, `lddw` shrinking
    │
    ▼  LeanSVM.SBPF.ELF
-      • Direct ELF64 `.so` linker & serializer (supports `--sbpf v0` and `--sbpf v3`)
+      • Direct sBPF v3 ELF64 `.so` linker & serializer (`e_flags = 3`, static syscalls, 0 relocations)
       • Zero-copy contiguous RO sections (`Section::Borrowed`); dynamic tables omitted when unused
 ```
 
@@ -103,7 +103,7 @@ Lean 4 Monomorphic LCNF (`Lean.Compiler.LCNF.monoExt`)
 - [`LeanSVM/Input.lean`](LeanSVM/Input.lean) — Demand-driven zero-copy account cursor, inline/auto-outlined 32-byte `pubkeyEq`/`pubkeyCopy`, checked arithmetic
 - [`LeanSVM/Math.lean`](LeanSVM/Math.lean) — Overflow-safe 128-bit `mulDiv64` / `mulDiv64Ceil` (fast 64-bit path + shared 128-bit fallback) & Newton `isqrt64`, with kernel-checked exact 128-bit arithmetic + memory-frame specs (`mul128_split_exact`, `div128Loop_exact`, `mulDiv64_ok_spec`, `mulDiv64Ceil_ok_spec`)
 - [`LeanSVM/CPI.lean`](LeanSVM/CPI.lean) — Zero-heap stack-allocated `sol_invoke_signed_c` CPIs for **SPL Token**, **SPL Token-2022** (`TransferChecked`, `MintTo`, `Burn`, `InitializeAccount3`), PDA signing, and `SystemProgram` (`Transfer`, PDA-signed `Allocate`, PDA-signed `Assign`), plus formally verified canonical program-ID pinning (`checkSystemProg`, `checkTokenProg`, `checkTokenOr2022Prog`) and dirty-memory zero-initialization (`zeroWords`, `zeroWords_exact`)
-- [`LeanSVM/SBPF/`](LeanSVM/SBPF/) — Native sBPF v0/v3 ISA encoder, Murmur3-32 hasher, disassembler, peephole & value-tracking optimizer, and ELF64 `.so` linker
+- [`LeanSVM/SBPF/`](LeanSVM/SBPF/) — Native sBPF v3 ISA encoder, Murmur3-32 hasher, disassembler, peephole & value-tracking optimizer, and ELF64 `.so` linker
 - [`LeanSVM/Compiler/`](LeanSVM/Compiler/) — `IR`, `Lower`, `Optimize`, `RegAlloc`, **`Validate`**, `CodeGen`, `Driver`, and **`Proofs`** (87 kernel-checked compiler soundness theorems)
 - [`.agents/skills/svm-security-testing/SKILL.md`](.agents/skills/svm-security-testing/SKILL.md) — Reusable agent & developer security skill covering common SVM vulnerabilities (same-tx account revival, dirty-buffer init, owner/size/discriminator checks, spoofed `noop.so` CPIs, SPL/lamport self-transfer aliasing, share-pool inflation, and LiteSVM + `SvmState.mem` proof patterns)
 
@@ -114,8 +114,8 @@ Lean 4 Monomorphic LCNF (`Lean.Compiler.LCNF.monoExt`)
 The production compiler passes (`Lower`, `CodeGen`, `RegAlloc`, `Validate`, `Optimize`, `Peephole`, and `ISA`) are directly machine-checked against a formal small-step sBPF machine semantics in [`LeanSVM/Compiler/Proofs.lean`](LeanSVM/Compiler/Proofs.lean) (**87 theorems, 0 `sorry`, 0 custom axioms**, plus 13 syscall/CPI/memory-model theorems in [`LeanSVM/Runtime.lean`](LeanSVM/Runtime.lean) and 4 FIPS 180-4 SHA-256 theorems in [`LeanSVM/Sha256.lean`](LeanSVM/Sha256.lean)):
 
 - **Certified Translation Validator & End-to-End RegAlloc → CodeGen Bridge:** **`checkProgramCFG_sound`**, **`locWellFormed_sound`**, **`locsConflict_false_sound`**, **`vregLocValid_sound`**, **`stmtDstValid_sound`**, **`checkStmtsBackward_sound`**, **`checkAllocCert_stack_frame_sound`**, and **`checkAllocCert_bridges_emitStmt_binOp`** (proves that every `checkAllocCert = true` certificate directly discharges ALL `CodeGen.emitStmt_binOp_sound` register-validity, scratch-disjointness, and non-interference preconditions — removing `RegAlloc` from the TCB!).
-- **sBPF v0 & v3 ISA Soundness & Trap Preservation:** **`sbpf_opcodes_disjoint`** (proves all ALU/LDX/STX/ST_IMM/NEG64 opcodes pairwise distinct on BOTH v0 and v3, ruling out the v3 `0x87` collision), **`neg64_v3_subImm_sound`** (`SUB64_IMM dst, 0` on v3), **`subImm_to_addImm_sound`** (normalizing `subImm` to `addImm (-imm)` for v3 SIMD-0174 operand order), **`BinOp.maskShiftImm_sound`**, and **`divMod_hasSideEffect_sound`** (DCE preserves division/modulo-by-zero traps).
-- **Exact Solana sBPF `ALU32` Sign-Extension Semantics:** `signExt32U32_toUInt32`, **`evalAlu32SBPF_fixup`** (models real Agave v0/v3 sign-extension on `add32`/`sub32`/`mul32` and proves the emitted `mov32 d, d` fixup restores exact zero-extended Lean `UInt32` semantics across every `emitStmt` binOp/binImm path).
+- **sBPF v3 ISA Soundness & Trap Preservation:** **`sbpf_opcodes_disjoint`** (proves all ALU/LDX/STX/ST_IMM/NEG64 opcodes pairwise distinct on sBPF v3, ruling out the `0x87` collision), **`neg64_v3_sound`** (`NEG64 (0x87)`, SIMD-0377), **`subImm_to_addImm_sound`** (normalizing `subImm` to `addImm (-imm)` for sBPF v3 SIMD-0174 operand order), **`BinOp.maskShiftImm_sound`**, and **`divMod_hasSideEffect_sound`** (DCE preserves division/modulo-by-zero traps).
+- **Exact Solana sBPF `ALU32` Sign-Extension Semantics:** `signExt32U32_toUInt32`, **`evalAlu32SBPF_fixup`** (models real Agave sBPF v3 sign-extension on `add32`/`sub32`/`mul32` and proves the emitted `mov32 d, d` fixup restores exact zero-extended Lean `UInt32` semantics across every `emitStmt` binOp/binImm path).
 - **Memory & Stack Disjointness:** `loadBytes_storeBytes_b8_same`, `loadBytes_storeBytes_b1_same`, `loadBytes_storeBytes_b8_nonOverlapping_stack` (proves non-overlapping 8-byte stack-slot invalidation in `bbValueTrackPass`).
 - **ISA Encoding & Constant Materialization:** **`pushRawInsn_roundtrip`** (bit-for-bit 8-byte binary encoding/decoding inverse on production `SBPF.pushRawInsn`), `fitsInt32_signExt32`, `fitsUInt32_zeroExt32`, `emitConst64_sound`, `JmpCond.invert_sound`, `CmpOp.toJmpCond_sound`, `CmpOp.invert_sound`, `CmpOp.flip_sound`, `BinOp.isCommutative_sound`.
 - **Lowering Fallibility Analysis (Closes Transitive Error-Elision Bugs):** **`mayFailCheck_sound`**, **`mayFailCheck_unknown_failSafe`** (proves transitive `codeMayFail` soundness across arbitrary helper call chains and fail-safe rejection of unknown/external callees).
@@ -124,7 +124,7 @@ The production compiler passes (`Lower`, `CodeGen`, `RegAlloc`, `Validate`, `Opt
 - **CodeGen Soundness, Cycle-Safe Moves & Zero-Clobber Frame Conditions:** `loadVReg_sound`, `storeVReg_sound`, `emitSingleLocMove_sound`, **`emitParallelLocMoves_regSwap_sound`**, **`emitParallelLocMoves_stackSwap_sound`** (cycle-breaking 2-register and 2-stack-slot swaps directly on production `CodeGen.emitParallelLocMoves`), **`emitStmt_cmp_sound`**, **`emitStmt_binOp_sound`** (all 21 64/32-bit ops with direct `dst` scratch loading across all reg/stack/imm combinations), `emitStmt_binImm_sound`, `emitStmt_constImm_sound`, `emitStmt_mov_sound`, `emitStmt_neg64_sound`, `emitStmt_load_sound`, `emitStmt_store_sound`, `emitStmt_storeImm_sound`, `emitStmt_loadStack_sound`, `emitStmt_storeStack_sound`, `emitStmt_storeStackImm_sound`, `emitStmt_stackAddr_sound`.
 - **RegAlloc Scratch Safety:** `funcUsesScratchR5_complete` (proves `r5` is reserved whenever any `.binOp`, `.cmp`, `.store`, or `.brCmp` reloads a `.stack` or rematerialized `.imm` operand into `r5`).
 - [`Examples/`](Examples/) — 8 formally verified Solana programs (`Noop`, `Counter`, `Vault`, `HashCheck`, `Amm`, `Lending`, `DutchAuction`, `BondingCurve`)
-- [`svm-runner/`](svm-runner/) — Minimal-dependency LiteSVM (`0.11.0` / Agave `3.1.3`) end-to-end test & Rust comparison benchmark runner
+- [`svm-runner/`](svm-runner/) — Minimal-dependency LiteSVM (`0.18.2` / Agave `4.x`, sBPF v3) end-to-end test & Rust comparison benchmark runner
 - [`benchmarks/`](benchmarks/) — Zero-dep `#![no_std]` hand-rolled Rust baseline programs
 
 ---
@@ -135,13 +135,12 @@ The production compiler passes (`Lower`, `CodeGen`, `RegAlloc`, `Validate`, `Opt
 # 1. Build SDK, compiler, and verify all Lean 4 formal proofs
 lake build
 
-# 2. Compile any Lean 4 entrypoint directly to a Solana sBPF .so binary
+# 2. Compile any Lean 4 entrypoint directly to a Solana sBPF v3 .so binary
 lake exe lean-svm build Examples.Amm Examples.Amm.entrypoint -o build/amm.so
 
 # Optional flags:
-#   --sbpf v0|v3   Target sBPF v0 (default, mainnet/Agave) or strict sBPF v3 (static syscalls)
 #   --dump-ir      Print raw and optimized SbfIR
-#   --dump-asm     Print generated sBPF assembly
+#   --dump-asm     Print generated sBPF v3 assembly
 
 # 3. Run full build + compile + LiteSVM verification & head-to-head Rust benchmarks
 ./scripts/build-and-test.sh

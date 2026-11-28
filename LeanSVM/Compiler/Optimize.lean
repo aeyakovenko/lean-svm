@@ -424,7 +424,7 @@ private def forwardOptPass (f : Func) : Func × Bool := Id.run do
               changed := true; aliases := aliases.insert d l; s1 := .mov d l
             else if let some i32 := fitsInt32U64 cr then
               -- Normalize `sub64 d, l, imm` to `add64 d, l, (-imm)` when `-imm` fits in Int32:
-              -- identical on both sBPF v0 and v3 (where SUB64_IMM computes `imm - dst`!) and unlocks CSE/folding.
+              -- avoids sBPF v3's reversed `SUB64_IMM` (`imm - dst`, SIMD-0174) and unlocks CSE/folding.
               if let some negI32 := fitsInt32Int (-i32.toInt) then
                 changed := true
                 addOffs := addOffs.insert d (l, negI32.toInt)
@@ -507,7 +507,7 @@ private def forwardOptPass (f : Func) : Func × Bool := Id.run do
         if imm != imm0 then
           changed := true
           s1 := .binImm op0 d l imm
-        -- Normalize `sub64`/`sub32` immediate to `add64`/`add32` with negated immediate (v0 & v3 safe)
+        -- Normalize `sub64`/`sub32` immediate to `add64`/`add32` with negated immediate (sBPF v3 SIMD-0174 safe)
         let (op1, imm1) :=
           if op0 == .sub64 then
             match fitsInt32Int (-imm.toInt) with
